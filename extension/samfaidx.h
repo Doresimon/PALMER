@@ -19,8 +19,6 @@
 
 #include <samtools/samtools.h>
 
-// #include "extension/extern-sam.h"
-
 class SamFaidx
 {
 private:

@@ -63,7 +63,6 @@ public:
             issLine >> tmp;
             UNKNOWNs.push_back(tmp);
         }
-        // printf("[SamLine] UNKNOWNs.size = %d\n", UNKNOWNs.size());
     };
     ~SamLine()
     {

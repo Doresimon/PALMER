@@ -45,4 +45,4 @@ samfaidx.o: extension/samfaidx.cpp $(HTSLIB_PUBLIC_HEADERS) $(samtools_h)
 	$(CC) $(ALL_CPPFLAGS) -c $^ 
 
 clean :
-	rm -rf $(TARGET) *.o 0000/*
+	rm -rf $(TARGET) *.o

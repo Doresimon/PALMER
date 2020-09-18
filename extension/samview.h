@@ -44,7 +44,6 @@ public:
     ~Samview();
 
     int SamViewCommand(int argc, char *argv[], const char *inFileName, int argMinMapQ, const char *argRegion);
-    // int SamViewCommand(const char *inFileName, int argMinMapQ, const char *argRegion);
     int SamViewHeaderOnly(const char *inFileName);
 
 private:

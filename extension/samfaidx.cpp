@@ -149,192 +149,6 @@ static int read_regions_from_file(faidx_t *faid, hFILE *in_file, FILE *file, con
     return ret;
 }
 
-static int usage(FILE *fp, enum fai_format_options format, int exit_status)
-{
-    char *tool, *file_type;
-
-    if (format == FAI_FASTA) {
-        tool = "faidx <file.fa|file.fa.gz>";
-        file_type = "FASTA";
-    } else {
-        tool = "fqidx <file.fq|file.fq.gz>";
-        file_type = "FASTQ";
-    }
-
-    fprintf(fp, "Usage: samtools %s [<reg> [...]]\n", tool);
-    fprintf(fp, "Option: \n"
-                " -o, --output FILE        Write %s to file.\n"
-                " -n, --length INT         Length of %s sequence line. [60]\n"
-                " -c, --continue           Continue after trying to retrieve missing region.\n"
-                " -r, --region-file FILE   File of regions.  Format is chr:from-to. One per line.\n"
-                " -i, --reverse-complement Reverse complement sequences.\n"
-                "     --mark-strand TYPE   Add strand indicator to sequence name\n"
-                "                          TYPE = rc   for /rc on negative strand (default)\n"
-                "                                 no   for no strand indicator\n"
-                "                                 sign for (+) / (-)\n"
-                "                                 custom,<pos>,<neg> for custom indicator\n",
-                file_type, file_type);
-
-
-    if (format == FAI_FASTA) {
-       fprintf(fp, " -f, --fastq              File and index in FASTQ format.\n");
-    }
-
-    fprintf(fp, " -h, --help               This message.\n");
-
-    return exit_status;
-}
-
-int faidx_core(int argc, char *argv[], enum fai_format_options format)
-{
-    int c, ignore_error = 0, rev = 0;
-    int line_len = DEFAULT_FASTA_LINE_LEN ;/* fasta line len */
-    char* output_file = NULL; /* output file (default is stdout ) */
-    char *region_file = NULL; // list of regions from file, one per line
-    char *pos_strand_name = ""; // Extension to add to name for +ve strand
-    char *neg_strand_name = "/rc"; // Extension to add to name for -ve strand
-    char *strand_names = NULL; // Used for custom strand annotation
-    FILE* file_out = stdout;/* output stream */
-
-    static const struct option lopts[] = {
-        { "output", required_argument,       NULL, 'o' },
-        { "help",   no_argument,             NULL, 'h' },
-        { "length", required_argument,       NULL, 'n' },
-        { "continue", no_argument,           NULL, 'c' },
-        { "region-file", required_argument,  NULL, 'r' },
-        { "fastq", no_argument,              NULL, 'f' },
-        { "reverse-complement", no_argument, NULL, 'i' },
-        { "mark-strand", required_argument, NULL, 1000 },
-        { NULL, 0, NULL, 0 }
-    };
-
-    while ((c = getopt_long(argc, argv, "ho:n:cr:fi", lopts, NULL)) >= 0) {
-        switch (c) {
-            case 'o': output_file = optarg; break;
-            case 'n': line_len = atoi(optarg);
-                      if(line_len<1) {
-                        fprintf(stderr,"[faidx] bad line length '%s', using default:%d\n",optarg,DEFAULT_FASTA_LINE_LEN);
-                        line_len= DEFAULT_FASTA_LINE_LEN ;
-                        }
-                      break;
-            case 'c': ignore_error = 1; break;
-            case 'r': region_file = optarg; break;
-            case 'f': format = FAI_FASTQ; break;
-            case 'i': rev = 1; break;
-            case '?': return usage(stderr, format, EXIT_FAILURE);
-            case 'h': return usage(stdout, format, EXIT_SUCCESS);
-            case 1000:
-                if (strcmp(optarg, "no") == 0) {
-                    pos_strand_name = neg_strand_name = "";
-                } else if (strcmp(optarg, "sign") == 0) {
-                    pos_strand_name = "(+)";
-                    neg_strand_name = "(-)";
-                } else if (strcmp(optarg, "rc") == 0) {
-                    pos_strand_name = "";
-                    neg_strand_name = "/rc";
-                } else if (strncmp(optarg, "custom,", 7) == 0) {
-                    size_t len = strlen(optarg + 7);
-                    size_t comma = strcspn(optarg + 7, ",");
-                    free(strand_names);
-                    strand_names = pos_strand_name = (char *)malloc(len + 2);
-                    if (!strand_names) {
-                        fprintf(stderr, "[faidx] Out of memory\n");
-                        return EXIT_FAILURE;
-                    }
-                    neg_strand_name = pos_strand_name + comma + 1;
-                    memcpy(pos_strand_name, optarg + 7, comma);
-                    pos_strand_name[comma] = '\0';
-                    if (comma < len)
-                        memcpy(neg_strand_name, optarg + 7 + comma + 1,
-                               len - comma);
-                    neg_strand_name[len - comma] = '\0';
-                } else {
-                    fprintf(stderr, "[faidx] Unknown --mark-strand option \"%s\"\n", optarg);
-                    return usage(stderr, format, EXIT_FAILURE);
-                }
-                break;
-            default:  break;
-        }
-    }
-
-    if ( argc==optind )
-        return usage(stdout, format, EXIT_SUCCESS);
-
-    if ( optind+1 == argc && !region_file)
-    {
-        if (fai_build(argv[optind]) != 0) {
-            fprintf(stderr, "[faidx] Could not build fai index %s.fai\n", argv[optind]);
-            return EXIT_FAILURE;
-        }
-        return 0;
-    }
-
-    faidx_t *fai = fai_load_format(argv[optind], format);
-
-    if ( !fai ) {
-        fprintf(stderr, "[faidx] Could not load fai index of %s\n", argv[optind]);
-        return EXIT_FAILURE;
-    }
-
-    /** output file provided by user */
-    if( output_file != NULL ) {
-        if( strcmp( output_file, argv[optind] ) == 0 ) {
-            fprintf(stderr,"[faidx] Same input/output : %s\n", output_file);
-            return EXIT_FAILURE;
-        }
-
-        file_out = fopen( output_file, "w" );
-
-        if( file_out == NULL) {
-            fprintf(stderr,"[faidx] Cannot open \"%s\" for writing :%s.\n", output_file, strerror(errno) );
-            return EXIT_FAILURE;
-        }
-    }
-
-    int exit_status = EXIT_SUCCESS;
-
-    if (region_file) {
-        hFILE *rf;
-
-        if ((rf = hopen(region_file, "r"))) {
-            exit_status = read_regions_from_file(fai, rf, file_out, ignore_error, line_len, rev, pos_strand_name, neg_strand_name, format);
-
-            if (hclose(rf) != 0) {
-                fprintf(stderr, "[faidx] Warning: failed to close %s", region_file);
-            }
-        } else {
-            fprintf(stderr, "[faidx] Failed to open \"%s\" for reading.\n", region_file);
-            exit_status = EXIT_FAILURE;
-        }
-    }
-
-    while ( ++optind<argc && exit_status == EXIT_SUCCESS) {
-        exit_status = write_output(fai, file_out, argv[optind], ignore_error, line_len, rev, pos_strand_name, neg_strand_name, format);
-    }
-
-    fai_destroy(fai);
-
-    if (fflush(file_out) == EOF) {
-        // print_error_errno("faidx", "failed to flush output");
-        exit_status = EXIT_FAILURE;
-    }
-
-    if( output_file != NULL) fclose(file_out);
-    free(strand_names);
-
-    return exit_status;
-}
-
-
-int faidx_main(int argc, char *argv[]) {
-    return faidx_core(argc, argv, FAI_FASTA);
-}
-
-
-int fqidx_main(int argc, char *argv[]) {
-    return faidx_core(argc, argv, FAI_FASTQ);
-}
-
 SamFaidx::SamFaidx(/* args */)
 {
 }
@@ -346,86 +160,12 @@ int SamFaidx::SamFaidxCommand(const char *faFileName, const char *regions, const
 {
     int c, ignore_error = 0, rev = 0;
     int line_len = DEFAULT_FASTA_LINE_LEN ;/* fasta line len */
-    // char* output_file = NULL; /* output file (default is stdout ) */
     char *region_file = NULL; // list of regions from file, one per line
     char *pos_strand_name = ""; // Extension to add to name for +ve strand
     char *neg_strand_name = "/rc"; // Extension to add to name for -ve strand
     char *strand_names = NULL; // Used for custom strand annotation
     FILE* file_out = stdout;/* output stream */
     enum fai_format_options format = FAI_FASTA;
-
-    // static const struct option lopts[] = {
-    //     { "output", required_argument,       NULL, 'o' },
-    //     { "help",   no_argument,             NULL, 'h' },
-    //     { "length", required_argument,       NULL, 'n' },
-    //     { "continue", no_argument,           NULL, 'c' },
-    //     { "region-file", required_argument,  NULL, 'r' },
-    //     { "fastq", no_argument,              NULL, 'f' },
-    //     { "reverse-complement", no_argument, NULL, 'i' },
-    //     { "mark-strand", required_argument, NULL, 1000 },
-    //     { NULL, 0, NULL, 0 }
-    // };
-
-    // while ((c = getopt_long(argc, argv, "ho:n:cr:fi", lopts, NULL)) >= 0) {
-    //     switch (c) {
-    //         case 'o': output_file = optarg; break;
-    //         case 'n': line_len = atoi(optarg);
-    //                   if(line_len<1) {
-    //                     fprintf(stderr,"[faidx] bad line length '%s', using default:%d\n",optarg,DEFAULT_FASTA_LINE_LEN);
-    //                     line_len= DEFAULT_FASTA_LINE_LEN ;
-    //                     }
-    //                   break;
-    //         case 'c': ignore_error = 1; break;
-    //         case 'r': region_file = optarg; break;
-    //         case 'f': format = FAI_FASTQ; break;
-    //         case 'i': rev = 1; break;
-    //         case '?': return usage(stderr, format, EXIT_FAILURE);
-    //         case 'h': return usage(stdout, format, EXIT_SUCCESS);
-    //         case 1000:
-    //             if (strcmp(optarg, "no") == 0) {
-    //                 pos_strand_name = neg_strand_name = "";
-    //             } else if (strcmp(optarg, "sign") == 0) {
-    //                 pos_strand_name = "(+)";
-    //                 neg_strand_name = "(-)";
-    //             } else if (strcmp(optarg, "rc") == 0) {
-    //                 pos_strand_name = "";
-    //                 neg_strand_name = "/rc";
-    //             } else if (strncmp(optarg, "custom,", 7) == 0) {
-    //                 size_t len = strlen(optarg + 7);
-    //                 size_t comma = strcspn(optarg + 7, ",");
-    //                 free(strand_names);
-    //                 strand_names = pos_strand_name = (char *)malloc(len + 2);
-    //                 if (!strand_names) {
-    //                     fprintf(stderr, "[faidx] Out of memory\n");
-    //                     return EXIT_FAILURE;
-    //                 }
-    //                 neg_strand_name = pos_strand_name + comma + 1;
-    //                 memcpy(pos_strand_name, optarg + 7, comma);
-    //                 pos_strand_name[comma] = '\0';
-    //                 if (comma < len)
-    //                     memcpy(neg_strand_name, optarg + 7 + comma + 1,
-    //                            len - comma);
-    //                 neg_strand_name[len - comma] = '\0';
-    //             } else {
-    //                 fprintf(stderr, "[faidx] Unknown --mark-strand option \"%s\"\n", optarg);
-    //                 return usage(stderr, format, EXIT_FAILURE);
-    //             }
-    //             break;
-    //         default:  break;
-    //     }
-    // }
-
-    // if ( argc==optind )
-    //     return usage(stdout, format, EXIT_SUCCESS);
-
-    // if ( optind+1 == argc && !region_file)
-    // {
-    //     if (fai_build(argv[optind]) != 0) {
-    //         fprintf(stderr, "[faidx] Could not build fai index %s.fai\n", argv[optind]);
-    //         return EXIT_FAILURE;
-    //     }
-    //     return 0;
-    // }
 
     faidx_t *fai = fai_load_format(faFileName, format);
 
@@ -436,11 +176,6 @@ int SamFaidx::SamFaidxCommand(const char *faFileName, const char *regions, const
 
     /** output file provided by user */
     if( output_file != NULL ) {
-        // if( strcmp( output_file, argv[optind] ) == 0 ) {
-        //     fprintf(stderr,"[faidx] Same input/output : %s\n", output_file);
-        //     return EXIT_FAILURE;
-        // }
-
         file_out = fopen( output_file, "w" );
 
         if( file_out == NULL) {
@@ -451,24 +186,7 @@ int SamFaidx::SamFaidxCommand(const char *faFileName, const char *regions, const
 
     int exit_status = EXIT_SUCCESS;
 
-    // if (region_file) {
-    //     hFILE *rf;
-
-    //     if ((rf = hopen(region_file, "r"))) {
-    //         exit_status = read_regions_from_file(fai, rf, file_out, ignore_error, line_len, rev, pos_strand_name, neg_strand_name, format);
-
-    //         if (hclose(rf) != 0) {
-    //             fprintf(stderr, "[faidx] Warning: failed to close %s", region_file);
-    //         }
-    //     } else {
-    //         fprintf(stderr, "[faidx] Failed to open \"%s\" for reading.\n", region_file);
-    //         exit_status = EXIT_FAILURE;
-    //     }
-    // }
-
-    // while ( ++optind<argc && exit_status == EXIT_SUCCESS) {
-        exit_status = write_output(fai, file_out, regions, ignore_error, line_len, rev, pos_strand_name, neg_strand_name, format);
-    // }
+    exit_status = write_output(fai, file_out, regions, ignore_error, line_len, rev, pos_strand_name, neg_strand_name, format);
 
     fai_destroy(fai);
 
@@ -481,40 +199,4 @@ int SamFaidx::SamFaidxCommand(const char *faFileName, const char *regions, const
     free(strand_names);
 
     return exit_status;
-
-
-    // const char *samtools = "samtools";
-    // const char *faidx = "faidx";
-
-    // int argc = 4;
-    // char **argv = (char **)malloc(sizeof(char *) * (argc + 1));
-    // int len = 0;
-
-    // len = sizeof(samtools);
-    // argv[0] = new char[len + 1];
-    // strcpy(argv[0], samtools);
-
-    // len = sizeof(faidx);
-    // argv[1] = new char[len + 1];
-    // strcpy(argv[1], faidx);
-
-    // len = sizeof(faFileName);
-    // argv[2] = new char[len + 1];
-    // strcpy(argv[2], faFileName);
-
-    // len = sizeof(regions);
-    // argv[3] = new char[len + 1];
-    // strcpy(argv[3], regions);
-
-    // argv[4] = NULL;
-
-    // int ret = faidx_main(argc - 1, argv + 1);
-
-    // delete[] argv[0];
-    // delete[] argv[1];
-    // delete[] argv[2];
-    // delete[] argv[3];
-    // free(argv);
-
-    // return ret;
 }
